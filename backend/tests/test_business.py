@@ -236,7 +236,7 @@ class TestFullDataFlowChain(unittest.TestCase):
 
     def test_full_chain_booth_a01(self):
         """BOOT-A01完整链路：A馆→BOOT-A01→现代科技风设计→2回路(75kW)→
-        2种物料→1家参展商→5进度节点→4验收项→1交场。"""
+        2种物料→1家参展商→5进度节点→4验收项→2交场（在途单+已签结旧单）。"""
         snapshot = exhibition.cross_module_snapshot("BOOT-A01")
         self.assertTrue(snapshot["ok"])
 
@@ -274,8 +274,8 @@ class TestFullDataFlowChain(unittest.TestCase):
         self.assertEqual(len(snapshot["safeties"]), 1)
         self.assertEqual(snapshot["safeties"][0]["检查点位"], "BOOT-A01")
 
-        # 交场单：1单
-        self.assertEqual(len(snapshot["handovers"]), 1)
+        # 交场单：2单（在途 v1.0 单 + 早已签结的旧回执单）
+        self.assertEqual(len(snapshot["handovers"]), 2)
 
         # 事件日志中应至少有变更传播操作
         self.assertGreaterEqual(snapshot["module_count"], 10)

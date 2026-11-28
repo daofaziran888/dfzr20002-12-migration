@@ -224,15 +224,46 @@ SEED_ROWS: dict[str, list[dict]] = {
     ],
 
     # 交场确认
+    # id=1：v1.0 时代送出确认但未收到回执的在途交场单（部署 v2 后需迁移并继续办理）
+    # id=2：BOOT-A02 草稿单，验收未签收不可交场
+    # id=3：BOOT-A01 早已签结的旧版交场单，已签范围在确认时冻结，后续新增验收项不得改写
     "handover": [
-        {"id": 1, "status": "草稿", "pending": True, "abnormal": False,
+        {"id": 1, "status": "待确认", "pending": True, "abnormal": False,
          "交出班组": "结构搭建组", "接收人员": "运营维护组", "遗留事项": "BOOT-A01",
          "交接时刻": "2026-09-19 08:00", "登记编号": "HAND-0001", "负责人": "刘施工",
-         "生效版本": "v1.0", "备注说明": "BOOT-A01交场 需验收签收全部通过"},
+         "生效版本": "v1.0", "回执版本": "v1.0",
+         "备注说明": "v1.0交场单已送出确认未收到回执 新版本上线后需迁移为v2回执继续办理"},
         {"id": 2, "status": "草稿", "pending": True, "abnormal": False,
          "交出班组": "饰面安装组", "接收人员": "运营维护组", "遗留事项": "BOOT-A02",
          "交接时刻": "2026-09-19 12:00", "登记编号": "HAND-0002", "负责人": "刘施工",
-         "生效版本": "v1.0", "备注说明": "BOOT-A02交场 验收清单未签收 不可交场"},
+         "生效版本": "v1.0", "回执版本": "v1.0",
+         "备注说明": "BOOT-A02交场 验收清单未签收 不可交场"},
+        {"id": 3, "status": "已确认", "pending": False, "abnormal": False,
+         "交出班组": "结构搭建组", "接收人员": "运营维护组", "遗留事项": "BOOT-A01",
+         "交接时刻": "2026-09-18 18:00", "登记编号": "HAND-0003", "负责人": "刘施工",
+         "生效版本": "v1.0", "回执版本": "v1.0",
+         "备注说明": "BOOT-A01首轮交场已签结 已签范围冻结保留",
+         "交场回执": {
+             "receipt_version": "v1.0",
+             "schema_version": "v1.0",
+             "frozen": True,
+             "migrated_from": None,
+             "booth_no": "BOOT-A01",
+             "booth_owner": "张策展",
+             "venue_name": "A馆主展厅",
+             "registration_no": "HAND-0003",
+             "signed_scope": [
+                 {"id": 1, "item": "钢结构稳固性验收", "status": "已确认"},
+                 {"id": 2, "item": "电气系统绝缘测试", "status": "已确认"},
+                 {"id": 3, "item": "灯光影音联动效果", "status": "已确认"},
+             ],
+             "unsigned_scope": [],
+             "scope_conflicts": [],
+             "signed_count": 3,
+             "unsigned_count": 0,
+             "checklist_total_at_confirm": 3,
+             "confirmed_at": "2026-09-18T18:00:00",
+         }},
     ],
 
     # 突发事件

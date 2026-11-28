@@ -60,6 +60,15 @@
             >
               {{ action }}
             </button>
+            <button
+              v-if="meta.key === 'handover'"
+              class="link"
+              type="button"
+              :data-testid="`receipt-${row.id}`"
+              @click="openReceipt(row)"
+            >
+              查看v2回执
+            </button>
           </td>
         </tr>
         <tr v-if="!rows.length">
@@ -95,6 +104,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 import {
   createEntry,
@@ -105,6 +115,7 @@ import {
 } from '@/api/backend-service'
 import type { EntryRow } from '@/data/types'
 
+const router = useRouter()
 const props = defineProps<{ moduleKey: string }>()
 const meta = moduleMeta(props.moduleKey)
 const rows = ref<EntryRow[]>([])
@@ -174,6 +185,11 @@ async function runAction(action: string, row: EntryRow) {
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '操作失败'
   }
+}
+
+function openReceipt(row: EntryRow) {
+  const boothNo = String(row['遗留事项'] ?? '')
+  void router.push({ name: 'handover-receipts', query: { id: String(row.id), booth: boothNo } })
 }
 
 async function reload() {

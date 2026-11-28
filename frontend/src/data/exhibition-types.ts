@@ -83,4 +83,47 @@ export interface HandoverResult {
   reason: string
   handover?: Record<string, unknown>
   validation?: Record<string, unknown>
+  idempotent?: boolean
+  receipt?: HandoverReceipt
+}
+
+export interface HandoverScopeItem {
+  id: number
+  item: string
+  status: string
+}
+
+export interface HandoverScopeConflict {
+  id: number
+  item: string
+  type: string
+  current_status: string
+}
+
+export interface HandoverReceipt {
+  ok: boolean
+  handover_id: number
+  registration_no: string
+  booth_no: string
+  status: string
+  receipt_version: string
+  frozen: boolean
+  migrated_from: string | null
+  booth_owner: string
+  venue_name: string
+  signed_scope: HandoverScopeItem[]
+  unsigned_scope: HandoverScopeItem[]
+  scope_conflicts: HandoverScopeConflict[]
+  signed_count: number
+  unsigned_count: number
+  checklist_total?: number
+  checklist_total_at_confirm?: number
+  confirmed_at: string
+}
+
+export interface BoothHandoverReceipts {
+  ok: boolean
+  booth_no: string
+  count: number
+  receipts: HandoverReceipt[]
 }

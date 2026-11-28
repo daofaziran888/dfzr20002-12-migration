@@ -1,6 +1,13 @@
 /** 跨模块会展引擎 API：执行历史、配额视图、进度推进等。 */
 import { request } from './client'
-import type { ExhibitionHistory, QuotaSummary, DAGStatus, HandoverResult } from '@/data/exhibition-types'
+import type {
+  ExhibitionHistory,
+  QuotaSummary,
+  DAGStatus,
+  HandoverResult,
+  HandoverReceipt,
+  BoothHandoverReceipts,
+} from '@/data/exhibition-types'
 
 const EXHIBITION_BASE = '/api/exhibition'
 
@@ -28,6 +35,28 @@ export async function signoffChecklist(checklistId: number): Promise<{ ok: boole
 
 export async function confirmHandover(handoverId: number): Promise<HandoverResult> {
   const response = await request(`${EXHIBITION_BASE}/handover/${handoverId}/confirm`, { method: 'POST' })
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => ({}))) as { detail?: string }
+    throw new Error(detail.detail ?? '交场确认失败')
+  }
+  return await response.json()
+}
+
+export async function fetchHandoverReceipt(handoverId: number): Promise<HandoverReceipt> {
+  const response = await request(`${EXHIBITION_BASE}/handover/${handoverId}/receipt`)
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => ({}))) as { detail?: string }
+    throw new Error(detail.detail ?? '交场回执查询失败')
+  }
+  return await response.json()
+}
+
+export async function fetchBoothHandoverReceipts(boothNo: string): Promise<BoothHandoverReceipts> {
+  const response = await request(`${EXHIBITION_BASE}/booth/${encodeURIComponent(boothNo)}/handover-receipts`)
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => ({}))) as { detail?: string }
+    throw new Error(detail.detail ?? '展位交场回执查询失败')
+  }
   return await response.json()
 }
 

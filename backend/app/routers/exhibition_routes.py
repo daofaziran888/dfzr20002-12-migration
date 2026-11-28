@@ -74,10 +74,31 @@ def checklist_signoff(checklist_id: int) -> dict:
 
 @exhibition_router.post("/handover/{handover_id}/confirm")
 def confirm_handover(handover_id: int) -> dict:
-    """交场确认：验收清单全部签收才能交场。"""
+    """交场确认：验收清单全部签收才能交场；已办结单重复提交幂等回放，不会重复交场。"""
     result = exhibition.do_handover(handover_id)
     if not result["ok"]:
         raise HTTPException(status_code=400, detail=result["reason"])
+    return result
+
+
+@exhibition_router.get("/handover/{handover_id}/receipt")
+def handover_receipt(handover_id: int) -> dict:
+    """v2 交场回执：接班人凭原办理编号打开即可回查交场结果或需补签的验收项。
+
+    v1.0 交场记录在首次读取时兼容迁移为 v2 回执，已办结旧单保留当时冻结的已签范围。
+    """
+    result = exhibition.handover_receipt_view(handover_id)
+    if not result["ok"]:
+        raise HTTPException(status_code=404, detail=result["reason"])
+    return result
+
+
+@exhibition_router.get("/booth/{booth_no}/handover-receipts")
+def booth_handover_receipts(booth_no: str) -> dict:
+    """同一展位的全部交场回执（含早已签结的旧交场单），用于接班人回查历史。"""
+    result = exhibition.booth_handover_receipts(booth_no)
+    if not result["ok"]:
+        raise HTTPException(status_code=404, detail=result["reason"])
     return result
 
 

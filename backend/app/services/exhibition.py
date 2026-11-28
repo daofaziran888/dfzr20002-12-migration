@@ -6,10 +6,194 @@
 from __future__ import annotations
 
 import copy
+import time
 from collections import deque
 from typing import Any
 
 from app.store import store
+
+# 交场回执格式版本：v1.0 为旧版交场单，v2.0 为新版本可回查交场回执。
+HANDOVER_SCHEMA_V1 = "v1.0"
+HANDOVER_SCHEMA_V2 = "v2.0"
+
+
+# ---------- 交场回执：v1.0 迁移与 v2 可回查 ----------
+
+def _checklist_brief(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item.get("id"),
+        "item": item.get("验收条目", ""),
+        "status": item.get("status", ""),
+    }
+
+
+def _booth_ownership(booth_no: str) -> dict[str, Any]:
+    """展位归属：从展位编排读取归属场馆与负责人，随回执一并交接。"""
+    booth = store.find_booth(booth_no)
+    if booth is None:
+        return {"booth_no": booth_no, "booth_owner": "", "venue_name": ""}
+    return {
+        "booth_no": booth_no,
+        "booth_owner": str(booth.get("负责人", "")),
+        "venue_name": str(booth.get("所属区域", "")),
+    }
+
+
+def _live_handover_scope(booth_no: str) -> dict[str, Any]:
+    """未办结单的实时验收范围：按所属展位读取验收项并区分已签/待签。"""
+    items = store.booth_checklist(booth_no)
+    signed = [_checklist_brief(i) for i in items if i.get("status") == "已确认"]
+    unsigned = [_checklist_brief(i) for i in items if i.get("status") != "已确认"]
+    return {
+        "signed_scope": signed,
+        "unsigned_scope": unsigned,
+        "signed_count": len(signed),
+        "unsigned_count": len(unsigned),
+        "checklist_total": len(items),
+    }
+
+
+def migrate_handover_receipt(handover_id: int) -> dict[str, Any]:
+    """把 v1.0 交场记录兼容迁移为 v2 交场回执（幂等，只迁移一次）。
+
+    - 已办结旧回执：保留确认当时冻结的已签范围，只做格式升级，不按当前验收清单重算。
+    - 未办结旧单：带入展位归属，按所属展位实时重建已签/待签范围供接班人继续办理。
+    """
+    handover = store.find("handover", handover_id)
+    if handover is None:
+        return {"ok": False, "reason": f"交场单 {handover_id} 不存在"}
+
+    receipt = handover.get("交场回执")
+    if receipt and receipt.get("schema_version") == HANDOVER_SCHEMA_V2:
+        return {"ok": True, "receipt": receipt, "migrated": False}
+
+    booth_no = str(handover.get("遗留事项", ""))
+    ownership = _booth_ownership(booth_no)
+    frozen = handover.get("status") == "已确认"
+
+    if frozen and isinstance(receipt, dict):
+        # 旧版已签结：冻结范围原样保留，仅升级回执格式并记录迁移来源。
+        new_receipt = {
+            "receipt_version": HANDOVER_SCHEMA_V2,
+            "schema_version": HANDOVER_SCHEMA_V2,
+            "frozen": True,
+            "migrated_from": receipt.get("receipt_version", HANDOVER_SCHEMA_V1),
+            **ownership,
+            "registration_no": handover.get("登记编号", ""),
+            "signed_scope": copy.deepcopy(receipt.get("signed_scope", [])),
+            "unsigned_scope": copy.deepcopy(receipt.get("unsigned_scope", [])),
+            "scope_conflicts": [],
+            "signed_count": receipt.get("signed_count", len(receipt.get("signed_scope", []))),
+            "unsigned_count": receipt.get("unsigned_count", 0),
+            "checklist_total_at_confirm": receipt.get(
+                "checklist_total_at_confirm", len(receipt.get("signed_scope", []))),
+            "confirmed_at": receipt.get("confirmed_at", ""),
+        }
+    else:
+        # 未办结 v1.0 单：迁移到 v2 后按所属展位实时呈现验收范围。
+        scope = _live_handover_scope(booth_no)
+        new_receipt = {
+            "receipt_version": HANDOVER_SCHEMA_V2,
+            "schema_version": HANDOVER_SCHEMA_V2,
+            "frozen": False,
+            "migrated_from": HANDOVER_SCHEMA_V1,
+            **ownership,
+            "registration_no": handover.get("登记编号", ""),
+            "signed_scope": scope["signed_scope"],
+            "unsigned_scope": scope["unsigned_scope"],
+            "scope_conflicts": [],
+            "signed_count": scope["signed_count"],
+            "unsigned_count": scope["unsigned_count"],
+            "checklist_total": scope["checklist_total"],
+            "confirmed_at": "",
+        }
+
+    handover["交场回执"] = new_receipt
+    handover["回执版本"] = HANDOVER_SCHEMA_V2
+    store.event_log.record(
+        module="handover",
+        entry_id=handover_id,
+        action="迁移v2回执",
+        after=copy.deepcopy(handover),
+        extra={"booth_no": booth_no, "from_version": HANDOVER_SCHEMA_V1,
+               "frozen": frozen, "frozen_signed_count": new_receipt["signed_count"]},
+    )
+    return {"ok": True, "receipt": new_receipt, "migrated": True}
+
+
+def handover_receipt_view(handover_id: int) -> dict[str, Any]:
+    """可回查的 v2 交场回执视图：接班人凭原办理编号即可查到交场结果或待补验收项。"""
+    handover = store.find("handover", handover_id)
+    if handover is None:
+        return {"ok": False, "reason": f"交场单 {handover_id} 不存在或已归档"}
+
+    # v1.0 记录懒迁移：工作台仍依赖原办理编号，打开即兼容为 v2 回执。
+    receipt = handover.get("交场回执")
+    if not receipt or receipt.get("schema_version") != HANDOVER_SCHEMA_V2:
+        migrated = migrate_handover_receipt(handover_id)
+        if not migrated["ok"]:
+            return migrated
+        receipt = migrated["receipt"]
+
+    booth_no = str(handover.get("遗留事项", ""))
+    view = {
+        "ok": True,
+        "handover_id": handover_id,
+        "registration_no": handover.get("登记编号", ""),
+        "booth_no": booth_no,
+        "status": handover.get("status", ""),
+        "receipt_version": receipt.get("receipt_version", HANDOVER_SCHEMA_V2),
+        "frozen": bool(receipt.get("frozen")),
+        "migrated_from": receipt.get("migrated_from"),
+        "booth_owner": receipt.get("booth_owner", ""),
+        "venue_name": receipt.get("venue_name", ""),
+        "signed_scope": copy.deepcopy(receipt.get("signed_scope", [])),
+        "unsigned_scope": copy.deepcopy(receipt.get("unsigned_scope", [])),
+        "scope_conflicts": [],
+        "signed_count": receipt.get("signed_count", 0),
+        "unsigned_count": receipt.get("unsigned_count", 0),
+        "confirmed_at": receipt.get("confirmed_at", ""),
+    }
+
+    if not receipt.get("frozen"):
+        # 未办结单：实时对照当前验收范围，暴露新旧记录冲突与需补签的验收项。
+        live = _live_handover_scope(booth_no)
+        frozen_signed_ids = {s.get("id") for s in receipt.get("signed_scope", [])}
+        current_items = store.booth_checklist(booth_no)
+        conflicts: list[dict[str, Any]] = []
+        for item in current_items:
+            item_id = item.get("id")
+            was_signed = item_id in frozen_signed_ids
+            if was_signed and item.get("status") != "已确认":
+                conflicts.append({
+                    "id": item_id, "item": item.get("验收条目", ""),
+                    "type": "已签后回退", "current_status": item.get("status", ""),
+                })
+            if not was_signed and item.get("status") != "已确认":
+                conflicts.append({
+                    "id": item_id, "item": item.get("验收条目", ""),
+                    "type": "新增待签", "current_status": item.get("status", ""),
+                })
+        view["unsigned_scope"] = live["unsigned_scope"]
+        view["signed_scope"] = live["signed_scope"]
+        view["signed_count"] = live["signed_count"]
+        view["unsigned_count"] = live["unsigned_count"]
+        view["checklist_total"] = live["checklist_total"]
+        view["scope_conflicts"] = conflicts
+
+    return view
+
+
+def booth_handover_receipts(booth_no: str) -> dict[str, Any]:
+    """同一展位的全部交场回执（含早已签结的旧单），供接班人回查历史交场。"""
+    if store.find_booth(booth_no) is None:
+        return {"ok": False, "reason": f"展位 {booth_no} 不存在"}
+    receipts = []
+    for handover in store.booth_handover(booth_no):
+        view = handover_receipt_view(int(handover.get("id", 0)))
+        if view.get("ok"):
+            receipts.append(view)
+    return {"ok": True, "booth_no": booth_no, "count": len(receipts), "receipts": receipts}
 
 
 # ---------- 面积配额 ----------
@@ -337,17 +521,60 @@ def validate_handover(handover_id: int) -> dict[str, Any]:
 
 
 def do_handover(handover_id: int) -> dict[str, Any]:
-    """执行交场确认（含验收门禁校验）。"""
+    """执行交场确认（含验收门禁、v1.0 迁移、回执冻结与幂等控制）。
+
+    已办结的交场单重复提交不会再多做一次交场：直接回传既有回执并标记幂等命中。
+    """
+    handover = store.find("handover", handover_id)
+    if handover is None:
+        return {"ok": False, "reason": f"交场单 {handover_id} 不存在"}
+
+    # 幂等：已办结回执重复确认时回放原结果，禁止重复交场。
+    if handover.get("status") == "已确认":
+        prior = ensure_idempotent("handover", handover_id, "完成交场")
+        return {
+            "ok": True,
+            "reason": "交场已办结，重复提交未再次交场，回传既有交场回执",
+            "handover": handover,
+            "idempotent": True,
+            "event_id": prior.get("event_id"),
+            "receipt": handover_receipt_view(handover_id),
+        }
+
     validation = validate_handover(handover_id)
     if not validation["ok"]:
         return validation
 
-    handover = store.find("handover", handover_id)
     before_state = copy.deepcopy(handover)
     handover["status"] = "已确认"
     handover["pending"] = False
 
     booth_no = str(handover.get("遗留事项", ""))
+
+    # v1.0 在途单先迁移为 v2，再冻结确认当时的已签验收范围。
+    receipt = handover.get("交场回执")
+    if not receipt or receipt.get("schema_version") != HANDOVER_SCHEMA_V2:
+        migrate_handover_receipt(handover_id)
+        receipt = handover.get("交场回执")
+    scope = _live_handover_scope(booth_no)
+    frozen_receipt = {
+        "receipt_version": HANDOVER_SCHEMA_V2,
+        "schema_version": HANDOVER_SCHEMA_V2,
+        "frozen": True,
+        "migrated_from": receipt.get("migrated_from") if receipt else HANDOVER_SCHEMA_V1,
+        **_booth_ownership(booth_no),
+        "registration_no": handover.get("登记编号", ""),
+        "signed_scope": copy.deepcopy(scope["signed_scope"]),
+        "unsigned_scope": [],
+        "scope_conflicts": [],
+        "signed_count": scope["signed_count"],
+        "unsigned_count": 0,
+        "checklist_total_at_confirm": scope["checklist_total"],
+        "confirmed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    handover["交场回执"] = frozen_receipt
+    handover["回执版本"] = HANDOVER_SCHEMA_V2
+
     store.event_log.record(
         module="handover",
         entry_id=handover_id,
@@ -355,9 +582,12 @@ def do_handover(handover_id: int) -> dict[str, Any]:
         before=before_state,
         after=copy.deepcopy(handover),
         extra={"booth_no": booth_no, "checklist_validated": True,
-                "checklist_total": validation.get("checklist_total", 0)},
+               "checklist_total": validation.get("checklist_total", 0),
+               "receipt_version": HANDOVER_SCHEMA_V2, "frozen": True},
     )
-    return {"ok": True, "reason": "交场完成", "handover": handover, "validation": validation}
+    return {"ok": True, "reason": "交场完成，v2交场回执已生成并冻结", "handover": handover,
+            "validation": validation, "idempotent": False,
+            "receipt": handover_receipt_view(handover_id)}
 
 
 # ---------- 变更传播与回退 ----------
